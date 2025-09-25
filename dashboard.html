@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>GCP Logs (global)</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Arial;padding:20px;background:#f7f7f8}
+    .bar{display:flex;gap:8px;align-items:center;margin-bottom:12px}
+    input,button{padding:8px 10px;font-size:14px}
+    button{cursor:pointer;border:1px solid #ddd;border-radius:8px;background:#fff}
+    pre{background:#111;color:#eee;padding:14px;border-radius:10px;overflow:auto}
+    .card{background:#fff;border:1px solid #eee;border-radius:12px;padding:12px;margin:10px 0}
+    .muted{color:#666;font-size:12px}
+    .error{color:#b00020;white-space:pre-wrap}
+  </style>
+</head>
+<body>
+  <h2>GCP Logs — Global (project: ihart-388018)</h2>
+
+  <div class="bar">
+    <label>Limit:
+      <input id="limit" type="number" min="1" value="50" style="width:80px">
+    </label>
+    <button id="refresh">Fetch Logs</button>
+    <span id="status" class="muted"></span>
+  </div>
+
+  <div id="results"></div>
+
+  <script>
+    const API = "http://127.0.0.1:5050/logs";
+    const fmtTime = s => new Date(s || Date.now()).toLocaleString();
+
+    async function load() {
+      const limit = document.getElementById("limit").value || 50;
+      const status = document.getElementById("status");
+      const results = document.getElementById("results");
+      results.innerHTML = "";
+      status.textContent = "Loading…";
+
+      try {
+        const res = await fetch(`${API}?limit=${encodeURIComponent(limit)}`);
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || "Unknown error");
+
+        if (!data.items.length) {
+          results.innerHTML = `<div class="card">No logs found.</div>`;
+        } else {
+          for (const item of data.items) {
+            const ts = item.timestamp || item.receiveTimestamp || null;
+            const text = item.textPayload ?? item.jsonPayload ?? item.protoPayload ?? item;
+            const card = document.createElement("div");
+            card.className = "card";
+            card.innerHTML = `
+              <div class="muted">${fmtTime(ts)}</div>
+              <pre>${escapeHTML(typeof text === "string" ? text : JSON.stringify(text, null, 2))}</pre>
+            `;
+            results.appendChild(card);
+          }
+        }
+        status.textContent = `Loaded ${data.items.length} record(s)`;
+      } catch (e) {
+        document.getElementById("status").textContent = "Error";
+        results.innerHTML = `<div class="error">${e.message}</div>`;
+      }
+    }
+
+    function escapeHTML(s){return s.replace(/[&<>"']/g,m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m]))}
+    document.getElementById("refresh").addEventListener("click", load);
+  </script>
+</body>
+</html>

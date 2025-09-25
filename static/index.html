@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>GCP Logs — Minimal Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #0f1220;
+      --card: #171a2b;
+      --muted: #9aa3b2;
+      --text: #e7ecf3;
+      --accent: #7aa2f7;
+      --ok: #38bdf8;
+      --warn: #f59e0b;
+      --err: #f87171;
+      --border: #262b3f;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji","Segoe UI Emoji";
+    }
+    header {
+      position: sticky; top: 0; z-index: 10;
+      backdrop-filter: saturate(160%) blur(8px);
+      background: color-mix(in srgb, var(--bg) 80%, transparent);
+      border-bottom: 1px solid var(--border);
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 16px; }
+    h1 { font-size: 18px; margin: 0 0 6px 0; }
+    .controls {
+      display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center;
+    }
+    input[type="text"], select {
+      width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
+      background: var(--card); color: var(--text);
+    }
+    button {
+      padding: 10px 14px; border-radius: 10px; border: 1px solid var(--border);
+      background: var(--card); color: var(--text); cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); }
+    main { padding: 18px 0 60px; }
+    .empty, .error { color: var(--muted); text-align: center; padding: 36px 0; }
+    .grid { display: grid; gap: 12px; }
+    .card {
+      border: 1px solid var(--border); background: var(--card); border-radius: 14px; overflow: clip;
+    }
+    .card-h {
+      display: grid; gap: 8px; padding: 12px; border-bottom: 1px solid var(--border);
+      grid-template-columns: 1fr auto; align-items: center;
+    }
+    .meta {
+      display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline;
+    }
+    .ts { font-variant-numeric: tabular-nums; color: var(--muted); }
+    .name { font-weight: 600; }
+    .badges { display: flex; gap: 6px; }
+    .badge {
+      font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border);
+      background: #141829; color: var(--text);
+    }
+    .sev-ok   { color: var(--ok);   border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); }
+    .sev-warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); }
+    .sev-err  { color: var(--err);  border-color: color-mix(in srgb, var(--err) 40%, var(--border)); }
+    .tools { display: flex; gap: 6px; }
+    .body { padding: 12px; display: grid; gap: 10px; }
+    .kv { display: flex; gap: 10px; flex-wrap: wrap; color: var(--muted); }
+    .kv span { color: var(--text); }
+    details { border: 1px dashed var(--border); border-radius: 10px; padding: 8px 10px; }
+    summary { cursor: pointer; color: var(--muted); }
+    pre {
+      margin: 8px 0 0; padding: 10px; border-radius: 8px; background: #0c0f1a; overflow: auto;
+      font-family: var(--mono); font-size: 12px; color: #d6deff;
+    }
+    .footer {
+      text-align: center; color: var(--muted); font-size: 12px; padding: 22px 0 40px;
+    }
+    @media (max-width: 720px) {
+      .controls { grid-template-columns: 1fr 1fr auto auto; }
+      .controls > *:nth-child(3) { grid-column: span 2; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>GCP Logs</h1>
+      <div class="controls">
+        <input id="q" type="text" placeholder="Filter (text, severity, resource, log name…)" />
+        <select id="sev">
+          <option value="">All severities</option>
+          <option>ERROR</option>
+          <option>WARNING</option>
+          <option>INFO</option>
+          <option>DEBUG</option>
+          <option>NOTICE</option>
+          <option>CRITICAL</option>
+          <option>ALERT</option>
+          <option>EMERGENCY</option>
+        </select>
+        <select id="gcp_cmd">
+          <option value="">Select GCP Command</option>
+          <option>GCLOUD_CMD</option>
+          <option>GCLOUD_CMD_TEST</option>
+        </select>
+        <button id="refresh">Refresh</button>
+        <button id="autorefresh">Auto: Off</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div id="status" class="empty">Loading…</div>
+    <div id="list" class="grid" hidden></div>
+    <div class="footer">Showing latest results from <code>/logs</code></div>
+  </main>
+
+  <script>
+    const listEl = document.getElementById('list');
+    const statusEl = document.getElementById('status');
+    const qEl = document.getElementById('q');
+    const sevEl = document.getElementById('sev');
+    const refreshBtn = document.getElementById('refresh');
+    const autoBtn = document.getElementById('autorefresh');
+
+    let cache = [];
+    let timer = null;
+
+    function sevClass(sev) {
+      if (!sev) return '';
+      const s = String(sev).toUpperCase();
+      if (['ERROR','CRITICAL','ALERT','EMERGENCY'].includes(s)) return 'sev-err';
+      if (['WARNING','NOTICE'].includes(s)) return 'sev-warn';
+      return 'sev-ok';
+    }
+
+    function fmtTs(ts) {
+      try {
+        const d = new Date(ts);
+        const now = Date.now();
+        const diff = Math.floor((now - d.getTime())/1000);
+        const rel = diff < 60 ? `${diff}s ago`
+                  : diff < 3600 ? `${Math.floor(diff/60)}m ago`
+                  : diff < 86400 ? `${Math.floor(diff/3600)}h ago`
+                  : d.toLocaleString();
+        return `${d.toLocaleString()} • ${rel}`;
+      } catch { return ts || ''; }
+    }
+
+    function escapeHTML(s) {
+      return (s ?? '').toString()
+        .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+    }
+
+    function pick(obj, path) {
+      try { return path.split('.').reduce((o,k)=>o?.[k], obj); } catch { return undefined; }
+    }
+
+    function render(items) {
+      const q = qEl.value.trim().toLowerCase();
+      const sevFilter = sevEl.value.trim().toUpperCase();
+
+      const filtered = items.filter(e => {
+        const sev = (e.severity ?? '').toUpperCase();
+        if (sevFilter && sev !== sevFilter) return false;
+        if (!q) return true;
+        const hay = [
+          e.textPayload, JSON.stringify(e.jsonPayload || {}),
+          e.logName, pick(e,'resource.type'), pick(e,'resource.labels.project_id'),
+          e.insertId, e.trace
+        ].join(' ').toLowerCase();
+        return hay.includes(q);
+      });
+
+      listEl.innerHTML = '';
+      if (!filtered.length) {
+        statusEl.textContent = 'No results';
+        statusEl.className = 'empty';
+        listEl.hidden = true;
+        return;
+      }
+      statusEl.textContent = '';
+      listEl.hidden = false;
+
+      for (const e of filtered) {
+        const ts = e.timestamp || e.receiveTimestamp || e['@timestamp'];
+        const sev = e.severity || 'INFO';
+        const logName = e.logName?.split('/').pop() || e.logName || 'log';
+        const rType = pick(e,'resource.type') || '—';
+        const project = pick(e,'resource.labels.project_id') || '—';
+        const service = pick(e,'resource.labels.service_name') || pick(e,'labels.service') || '';
+        const msg = e.textPayload || e.payload?.message || '';
+        const body = msg || (e.jsonPayload ? JSON.stringify(e.jsonPayload, null, 2) : '');
+
+        const card = document.createElement('article');
+        card.className = 'card';
+        card.innerHTML = `
+          <div class="card-h">
+            <div class="meta">
+              <span class="name">${escapeHTML(logName)}</span>
+              <span class="ts">${escapeHTML(fmtTs(ts))}</span>
+            </div>
+            <div class="badges">
+              <span class="badge ${sevClass(sev)}">${escapeHTML(sev)}</span>
+              <span class="badge" title="Resource type">${escapeHTML(rType)}</span>
+              ${service ? `<span class="badge" title="Service">${escapeHTML(service)}</span>` : ''}
+            </div>
+          </div>
+          <div class="body">
+            <div class="kv">
+              <div>Project: <span>${escapeHTML(project)}</span></div>
+              ${e.insertId ? `<div>InsertId: <span>${escapeHTML(e.insertId)}</span></div>` : ''}
+              ${e.trace ? `<div>Trace: <span>${escapeHTML(e.trace)}</span></div>` : ''}
+            </div>
+
+            ${body
+              ? `<details open>
+                   <summary>${msg ? 'Message' : 'Payload'} — click to toggle</summary>
+                   <pre>${msg ? escapeHTML(msg) : escapeHTML(JSON.stringify(e.jsonPayload, null, 2))}</pre>
+                 </details>`
+              : '<div class="kv" style="color:var(--muted)">No payload</div>'}
+            <div class="tools">
+              <button data-copy='${escapeHTML(JSON.stringify(e))}'>Copy JSON</button>
+              ${e.logName ? `<button data-open="${escapeHTML(e.logName)}">Open in Cloud Logging</button>` : ''}
+            </div>
+          </div>
+        `;
+        listEl.appendChild(card);
+      }
+
+      // wire buttons
+      listEl.querySelectorAll('button[data-copy]').forEach(btn=>{
+        btn.onclick = async () => {
+          try {
+            await navigator.clipboard.writeText(btn.getAttribute('data-copy'));
+            btn.textContent = 'Copied ✓'; setTimeout(()=>btn.textContent='Copy JSON',1200);
+          } catch { btn.textContent = 'Copy failed'; }
+        }
+      });
+      listEl.querySelectorAll('button[data-open]').forEach(btn=>{
+        btn.onclick = () => {
+          const logName = btn.getAttribute('data-open');
+          // Basic deep link to Logs Explorer (user can refine)
+          window.open('https://console.cloud.google.com/logs/query', '_blank');
+        }
+      });
+    }
+
+    async function load() {
+      statusEl.textContent = 'Loading…';
+      statusEl.className = 'empty';
+      try {
+        const res = await fetch('/logs');
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+        const data = await res.json();
+        cache = Array.isArray(data) ? data : (data.entries || []);
+        render(cache);
+      } catch (err) {
+        statusEl.textContent = `Failed to load logs: ${err.message}`;
+        statusEl.className = 'error';
+        listEl.hidden = true;
+      }
+    }
+
+    refreshBtn.onclick = load;
+    qEl.oninput = () => render(cache);
+    sevEl.onchange = () => render(cache);
+    autoBtn.onclick = () => {
+      if (timer) {
+        clearInterval(timer); timer = null; autoBtn.textContent = 'Auto: Off';
+      } else {
+        load(); timer = setInterval(load, 10000); autoBtn.textContent = 'Auto: On';
+      }
+    };
+
+    load();
+  </script>
+</body>
+</html>
