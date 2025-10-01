@@ -1,54 +1,45 @@
 # Logs Dashboard
 
-A simple Flask web application for viewing Google Cloud Platform logs.
+A simple dashboard to view GCP and Sentry logs side by side.
 
-in future, will be able to see firebase, sentry and any other logs across gcp services in one place 
+## Quick Start
 
-## Prerequisites
+1. **Install dependencies:**
+   ```bash
+   pip install flask flask-cors requests
+   ```
 
-- Python 3.x
-- Google Cloud SDK (`gcloud` CLI) installed and configured
-- Required environment variables set
+2. **Set environment variables:**
+   ```bash
+   # GCP 
+   export GOOGLE_APPLICATION_CREDENTIALS=path/to/your/service-account-key.json
+   export CLOUDSDK_CORE_PROJECT=ihart-388018
+   
+   # Sentry 
+   export SENTRY_ORG_SLUG=your-org-slug
+   export SENTRY_PROJECT_SLUG=your-project-slug  
+   export SENTRY_AUTH_TOKEN=your-auth-token
+   ```
 
-## Environment Variables
+3. **Run the server:**
+   ```bash
+   python server.py
+   ```
 
-Set the following environment variables before running the application:
+4. **Open dashboard:**
+   Visit `http://127.0.0.1:5050`
 
+## Features
 
-GOOGLE_APPLICATION_CREDENTIALS=path/to/your/service-account-key.json
-CLOUDSDK_CORE_PROJECT=your-gcp-project-id
+- **GCP Logs** (left): Shows production Cloud Run logs (INFO level and above)
+- **Sentry Logs** (right): Shows Sentry events with user-friendly formatting
+- **Real-time**: Auto-refresh every 10 seconds
+- **Filtering**: Search and filter by severity level
+- **Responsive**: Works on desktop and mobile
 
-## Installation
+## Sentry Setup (Optional)
 
-1. Install required Python packages:
-```bash
-pip install flask flask-cors
-```
-
-2. Make sure Google Cloud SDK is installed and authenticated:
-```bash
-gcloud auth login
-gcloud auth application-default login
-```
-
-## Running the Server
-
-To start the server, run:
-
-```bash
-python server.py
-```
-
-The server will start on `http://127.0.0.1:5050`
-
-## Usage
-
-- Visit `http://127.0.0.1:5050` to access the dashboard
-- The `/logs` endpoint provides JSON data from GCP logs
-- The `/health` endpoint provides server health status
-
-## Notes
-
-- The application is configured to read logs from the `ihart-388018` project
-- Logs are limited to 50 entries by default
-- Make sure your service account has the necessary permissions to read logs (use log-viewer)
+To get Sentry credentials:
+1. Go to https://sentry.io/settings/auth-tokens/
+2. Create a token with `project:read` scope
+3. Get org/project slugs from your Sentry dashboard URLs

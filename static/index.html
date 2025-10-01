@@ -28,7 +28,7 @@
       background: color-mix(in srgb, var(--bg) 80%, transparent);
       border-bottom: 1px solid var(--border);
     }
-    .wrap { max-width: 1100px; margin: 0 auto; padding: 16px; }
+    .wrap { max-width: 100vw; margin: 0 auto; padding: 16px; overflow-x: hidden; }
     h1 { font-size: 18px; margin: 0 0 6px 0; }
     .controls {
       display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center;
@@ -46,7 +46,8 @@
     .empty, .error { color: var(--muted); text-align: center; padding: 36px 0; }
     .grid { display: grid; gap: 12px; }
     .card {
-      border: 1px solid var(--border); background: var(--card); border-radius: 14px; overflow: clip;
+      border: 1px solid var(--border); background: var(--card); border-radius: 14px; overflow: hidden;
+      word-wrap: break-word; word-break: break-word;
     }
     .card-h {
       display: grid; gap: 8px; padding: 12px; border-bottom: 1px solid var(--border);
@@ -72,15 +73,65 @@
     details { border: 1px dashed var(--border); border-radius: 10px; padding: 8px 10px; }
     summary { cursor: pointer; color: var(--muted); }
     pre {
-      margin: 8px 0 0; padding: 10px; border-radius: 8px; background: #0c0f1a; overflow: auto;
-      font-family: var(--mono); font-size: 12px; color: #d6deff;
+      margin: 8px 0 0; padding: 10px; border-radius: 8px; background: #0c0f1a; overflow-x: auto; overflow-y: hidden;
+      font-family: var(--mono); font-size: 12px; color: #d6deff; white-space: pre-wrap; word-wrap: break-word;
+      max-width: 100%;
     }
     .footer {
       text-align: center; color: var(--muted); font-size: 12px; padding: 22px 0 40px;
     }
+    .dashboard-container {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 100%; overflow-x: hidden;
+    }
+    .logs-section {
+      border: 1px solid var(--border); border-radius: 14px; padding: 16px; background: var(--card);
+      min-width: 0; /* Allow flex items to shrink below their content size */
+      overflow-x: hidden;
+    }
+    .logs-section h2 {
+      margin: 0 0 16px 0; font-size: 16px; color: var(--text);
+    }
+    .sentry-details {
+      margin-top: 12px; padding: 12px; background: #0c0f1a; border-radius: 8px; border: 1px solid var(--border);
+    }
+    .sentry-section {
+      margin-bottom: 16px;
+    }
+    .sentry-section:last-child {
+      margin-bottom: 0;
+    }
+    .sentry-section strong {
+      color: var(--accent); font-size: 13px; display: block; margin-bottom: 6px;
+    }
+    .sentry-info {
+      display: grid; gap: 4px; font-size: 12px;
+    }
+    .sentry-info div {
+      display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap;
+    }
+    .sentry-info code {
+      background: #1a1d29; padding: 2px 6px; border-radius: 4px; font-family: var(--mono); font-size: 11px;
+    }
+    .sentry-tags {
+      display: flex; flex-wrap: wrap; gap: 6px;
+    }
+    .tag {
+      background: #1a1d29; padding: 4px 8px; border-radius: 12px; font-size: 11px; border: 1px solid var(--border);
+    }
+    .sentry-message {
+      font-weight: 500; margin-bottom: 8px; color: var(--text);
+    }
+    @media (max-width: 1200px) {
+      .dashboard-container { grid-template-columns: 1fr; gap: 16px; }
+      .wrap { padding: 12px; }
+    }
     @media (max-width: 720px) {
       .controls { grid-template-columns: 1fr 1fr auto auto; }
       .controls > *:nth-child(3) { grid-column: span 2; }
+      .dashboard-container { grid-template-columns: 1fr; }
+      .wrap { padding: 8px; }
+      .card-h { grid-template-columns: 1fr; gap: 8px; }
+      .meta { flex-direction: column; align-items: flex-start; }
     }
   </style>
 </head>
@@ -113,21 +164,50 @@
   </header>
 
   <main class="wrap">
-    <div id="status" class="empty">Loading…</div>
-    <div id="list" class="grid" hidden></div>
-    <div class="footer">Showing latest results from <code>/logs</code></div>
+    <div class="dashboard-container">
+      <div class="logs-section">
+        <h2>GCP Logs</h2>
+        <div id="status" class="empty">Loading…</div>
+        <div id="list" class="grid" hidden></div>
+      </div>
+      <div class="logs-section">
+        <h2>Sentry Logs</h2>
+        <div id="sentry-status" class="empty">Loading…</div>
+        <div id="sentry-list" class="grid" hidden></div>
+      </div>
+    </div>
+    <div class="footer">Showing latest results from <code>/logs</code> and <code>/sentry-logs</code></div>
   </main>
 
   <script>
     const listEl = document.getElementById('list');
     const statusEl = document.getElementById('status');
+    const sentryListEl = document.getElementById('sentry-list');
+    const sentryStatusEl = document.getElementById('sentry-status');
     const qEl = document.getElementById('q');
     const sevEl = document.getElementById('sev');
     const refreshBtn = document.getElementById('refresh');
     const autoBtn = document.getElementById('autorefresh');
 
     let cache = [];
+    let sentryCache = [];
     let timer = null;
+    
+    // Sentry configuration (will be set by server)
+    let SENTRY_ORG_SLUG = 'your-org-slug';
+    
+    // Load configuration from server
+    async function loadConfig() {
+      try {
+        const res = await fetch('/config');
+        if (res.ok) {
+          const config = await res.json();
+          SENTRY_ORG_SLUG = config.sentry_org_slug || 'your-org-slug';
+        }
+      } catch (err) {
+        console.warn('Failed to load config:', err);
+      }
+    }
 
     function sevClass(sev) {
       if (!sev) return '';
@@ -159,7 +239,7 @@
       try { return path.split('.').reduce((o,k)=>o?.[k], obj); } catch { return undefined; }
     }
 
-    function render(items) {
+    function renderGCP(items) {
       const q = qEl.value.trim().toLowerCase();
       const sevFilter = sevEl.value.trim().toUpperCase();
 
@@ -249,7 +329,233 @@
       });
     }
 
+    function renderSentry(items) {
+      const q = qEl.value.trim().toLowerCase();
+      const sevFilter = sevEl.value.trim().toUpperCase();
+
+      const filtered = items.filter(e => {
+        const sev = (e.severity ?? '').toUpperCase();
+        if (sevFilter && sev !== sevFilter) return false;
+        if (!q) return true;
+        const hay = [
+          e.textPayload, JSON.stringify(e.jsonPayload || {}),
+          e.logName, pick(e,'resource.type'), pick(e,'resource.labels.project_id'),
+          e.insertId, e.trace
+        ].join(' ').toLowerCase();
+        return hay.includes(q);
+      });
+
+      sentryListEl.innerHTML = '';
+      if (!filtered.length) {
+        sentryStatusEl.textContent = 'No results';
+        sentryStatusEl.className = 'empty';
+        sentryListEl.hidden = true;
+        return;
+      }
+      sentryStatusEl.textContent = '';
+      sentryListEl.hidden = false;
+
+      for (const e of filtered) {
+        const ts = e.timestamp || e.receiveTimestamp || e['@timestamp'];
+        const sev = e.severity || 'INFO';
+        const logName = e.logName?.split('/').pop() || e.logName || 'log';
+        const rType = pick(e,'resource.type') || '—';
+        const project = pick(e,'resource.labels.project_id') || '—';
+        const service = pick(e,'resource.labels.service_name') || pick(e,'labels.service') || '';
+        
+        // Enhanced Sentry-specific formatting
+        let msg = e.textPayload || e.payload?.message || '';
+        let body = '';
+        let sentryDetails = '';
+        
+        if (e.jsonPayload) {
+          const sentryData = e.jsonPayload;
+          // Create a more readable message for Sentry events
+          if (sentryData.title) {
+            msg = sentryData.title;
+          } else if (sentryData.culprit) {
+            msg = sentryData.culprit;
+          } else if (sentryData.message) {
+            msg = sentryData.message;
+          }
+          
+          // Create a structured display of Sentry data
+          const sentryInfo = [];
+          if (sentryData.level) sentryInfo.push(`Level: ${sentryData.level}`);
+          if (sentryData.platform) sentryInfo.push(`Platform: ${sentryData.platform}`);
+          if (sentryData.user && sentryData.user.email) sentryInfo.push(`User: ${sentryData.user.email}`);
+          if (sentryData.user && sentryData.user.name) sentryInfo.push(`Name: ${sentryData.user.name}`);
+          if (sentryData.tags && Object.keys(sentryData.tags).length > 0) {
+            const importantTags = Object.entries(sentryData.tags)
+              .filter(([k,v]) => v !== null && v !== undefined && v !== '' && typeof v !== 'object')
+              .slice(0, 3) // Show only first 3 important tags
+              .map(([k,v]) => `${k}: ${v}`)
+              .join(', ');
+            if (importantTags) sentryInfo.push(`Tags: ${importantTags}`);
+          }
+          
+          body = sentryInfo.join(' • ');
+          
+          // Create detailed Sentry information
+          sentryDetails = `
+            <div class="sentry-details">
+              <div class="sentry-section">
+                <strong>Event Details:</strong>
+                <div class="sentry-info">
+                  ${sentryData.event_id ? `<div>Event ID: <code>${escapeHTML(sentryData.event_id)}</code></div>` : ''}
+                  ${sentryData.level ? `<div>Level: <span class="badge ${sevClass(sentryData.level)}">${escapeHTML(sentryData.level)}</span></div>` : ''}
+                  ${sentryData.platform ? `<div>Platform: <span>${escapeHTML(sentryData.platform)}</span></div>` : ''}
+                  ${sentryData.culprit ? `<div>Culprit: <span>${escapeHTML(sentryData.culprit)}</span></div>` : ''}
+                </div>
+              </div>
+              
+              ${sentryData.user && Object.keys(sentryData.user).length > 0 ? `
+                <div class="sentry-section">
+                  <strong>User Information:</strong>
+                  <div class="sentry-info">
+                    ${sentryData.user.id ? `<div>User ID: <code>${escapeHTML(sentryData.user.id)}</code></div>` : ''}
+                    ${sentryData.user.email ? `<div>Email: <span>${escapeHTML(sentryData.user.email)}</span></div>` : ''}
+                    ${sentryData.user.name ? `<div>Name: <span>${escapeHTML(sentryData.user.name)}</span></div>` : ''}
+                    ${sentryData.user.username ? `<div>Username: <span>${escapeHTML(sentryData.user.username)}</span></div>` : ''}
+                    ${sentryData.user.ip_address ? `<div>IP: <code>${escapeHTML(sentryData.user.ip_address)}</code></div>` : ''}
+                    ${sentryData.user.geo && typeof sentryData.user.geo === 'object' ? `
+                      <div>Location: <span>${sentryData.user.geo.city ? escapeHTML(sentryData.user.geo.city) : ''}${sentryData.user.geo.country_code ? `, ${escapeHTML(sentryData.user.geo.country_code)}` : ''}</span></div>
+                    ` : ''}
+                  </div>
+                </div>
+              ` : ''}
+              
+              ${sentryData.tags && Object.keys(sentryData.tags).length > 0 ? `
+                <div class="sentry-section">
+                  <strong>Tags:</strong>
+                  <div class="sentry-tags">
+                    ${Object.entries(sentryData.tags)
+                      .filter(([k,v]) => v !== null && v !== undefined && v !== '' && typeof v !== 'object')
+                      .map(([k,v]) => `<span class="tag">${escapeHTML(k)}: ${escapeHTML(String(v))}</span>`)
+                      .join('')}
+                  </div>
+                </div>
+              ` : ''}
+              
+              ${sentryData.contexts && Object.keys(sentryData.contexts).length > 0 ? `
+                <div class="sentry-section">
+                  <strong>Context:</strong>
+                  <div class="sentry-info">
+                    ${Object.entries(sentryData.contexts)
+                      .filter(([k,v]) => v !== null && v !== undefined)
+                      .map(([k,v]) => {
+                        if (typeof v === 'object' && v !== null) {
+                          const importantKeys = ['name', 'version', 'type', 'title', 'description'];
+                          const importantInfo = Object.entries(v)
+                            .filter(([key, val]) => importantKeys.includes(key) && val !== null && val !== undefined)
+                            .map(([key, val]) => `${key}: ${val}`)
+                            .join(', ');
+                          return `<div>${k}: <span>${escapeHTML(importantInfo || JSON.stringify(v, null, 2))}</span></div>`;
+                        }
+                        return `<div>${k}: <span>${escapeHTML(String(v))}</span></div>`;
+                      })
+                      .join('')}
+                  </div>
+                </div>
+              ` : ''}
+              
+              ${sentryData.extra && Object.keys(sentryData.extra).length > 0 ? `
+                <div class="sentry-section">
+                  <strong>Additional Info:</strong>
+                  <div class="sentry-info">
+                    ${Object.entries(sentryData.extra)
+                      .filter(([k,v]) => v !== null && v !== undefined && typeof v !== 'object')
+                      .map(([k,v]) => `<div>${k}: <span>${escapeHTML(String(v))}</span></div>`)
+                      .join('')}
+                  </div>
+                </div>
+              ` : ''}
+            </div>
+          `;
+        } else {
+          body = msg || (e.jsonPayload ? JSON.stringify(e.jsonPayload, null, 2) : '');
+        }
+
+        const card = document.createElement('article');
+        card.className = 'card';
+        card.innerHTML = `
+          <div class="card-h">
+            <div class="meta">
+              <span class="name">${escapeHTML(logName)}</span>
+              <span class="ts">${escapeHTML(fmtTs(ts))}</span>
+            </div>
+            <div class="badges">
+              <span class="badge ${sevClass(sev)}">${escapeHTML(sev)}</span>
+              <span class="badge" title="Resource type">${escapeHTML(rType)}</span>
+              ${service ? `<span class="badge" title="Service">${escapeHTML(service)}</span>` : ''}
+            </div>
+          </div>
+          <div class="body">
+            <div class="kv">
+              <div>Project: <span>${escapeHTML(project)}</span></div>
+              ${e.insertId ? `<div>InsertId: <span>${escapeHTML(e.insertId)}</span></div>` : ''}
+              ${e.trace ? `<div>Trace: <span>${escapeHTML(e.trace)}</span></div>` : ''}
+            </div>
+
+            ${body
+              ? `<details open>
+                   <summary>${msg ? 'Message' : 'Payload'} — click to toggle</summary>
+                   <div class="sentry-message">${escapeHTML(msg)}</div>
+                   ${sentryDetails}
+                 </details>`
+              : '<div class="kv" style="color:var(--muted)">No payload</div>'}
+            <div class="tools">
+              <button data-copy='${escapeHTML(JSON.stringify(e))}'>Copy JSON</button>
+              ${e.logName ? `<button data-open="${escapeHTML(e.logName)}">Open in Sentry</button>` : ''}
+            </div>
+          </div>
+        `;
+        sentryListEl.appendChild(card);
+      }
+
+      // wire buttons
+      sentryListEl.querySelectorAll('button[data-copy]').forEach(btn=>{
+        btn.onclick = async () => {
+          try {
+            await navigator.clipboard.writeText(btn.getAttribute('data-copy'));
+            btn.textContent = 'Copied ✓'; setTimeout(()=>btn.textContent='Copy JSON',1200);
+          } catch { btn.textContent = 'Copy failed'; }
+        }
+      });
+      sentryListEl.querySelectorAll('button[data-open]').forEach(btn=>{
+        btn.onclick = () => {
+          const logName = btn.getAttribute('data-open');
+          // Extract event ID from logName and link to Sentry
+          const eventId = logName.split('/').pop();
+          if (eventId && eventId !== 'unknown') {
+            window.open(`https://sentry.io/organizations/${SENTRY_ORG_SLUG}/issues/?query=${eventId}`, '_blank');
+          } else {
+            window.open('https://sentry.io/', '_blank');
+          }
+        }
+      });
+    }
+
+    async function loadSentry() {
+      sentryStatusEl.textContent = 'Loading…';
+      sentryStatusEl.className = 'empty';
+      try {
+        const res = await fetch('/sentry-logs');
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+        const data = await res.json();
+        sentryCache = Array.isArray(data) ? data : (data.entries || []);
+        renderSentry(sentryCache);
+      } catch (err) {
+        sentryStatusEl.textContent = `Failed to load Sentry logs: ${err.message}`;
+        sentryStatusEl.className = 'error';
+        sentryListEl.hidden = true;
+      }
+    }
+
     async function load() {
+      // Load configuration first
+      await loadConfig();
+      
       statusEl.textContent = 'Loading…';
       statusEl.className = 'empty';
       try {
@@ -257,17 +563,26 @@
         if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
         const data = await res.json();
         cache = Array.isArray(data) ? data : (data.entries || []);
-        render(cache);
+        renderGCP(cache);
       } catch (err) {
         statusEl.textContent = `Failed to load logs: ${err.message}`;
         statusEl.className = 'error';
         listEl.hidden = true;
       }
+      
+      // Load Sentry logs in parallel
+      loadSentry();
     }
 
     refreshBtn.onclick = load;
-    qEl.oninput = () => render(cache);
-    sevEl.onchange = () => render(cache);
+    qEl.oninput = () => {
+      renderGCP(cache);
+      renderSentry(sentryCache);
+    };
+    sevEl.onchange = () => {
+      renderGCP(cache);
+      renderSentry(sentryCache);
+    };
     autoBtn.onclick = () => {
       if (timer) {
         clearInterval(timer); timer = null; autoBtn.textContent = 'Auto: Off';
