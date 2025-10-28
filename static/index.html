@@ -81,7 +81,7 @@
       text-align: center; color: var(--muted); font-size: 12px; padding: 22px 0 40px;
     }
     .dashboard-container {
-      display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 100%; overflow-x: hidden;
+      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; max-width: 100%; overflow-x: hidden;
     }
     .logs-section {
       border: 1px solid var(--border); border-radius: 14px; padding: 16px; background: var(--card);
@@ -121,7 +121,11 @@
     .sentry-message {
       font-weight: 500; margin-bottom: 8px; color: var(--text);
     }
-    @media (max-width: 1200px) {
+    @media (max-width: 1400px) {
+      .dashboard-container { grid-template-columns: 1fr 1fr; gap: 16px; }
+      .wrap { padding: 12px; }
+    }
+    @media (max-width: 1000px) {
       .dashboard-container { grid-template-columns: 1fr; gap: 16px; }
       .wrap { padding: 12px; }
     }
@@ -171,12 +175,17 @@
         <div id="list" class="grid" hidden></div>
       </div>
       <div class="logs-section">
+        <h2>Firebase Users</h2>
+        <div id="fbusers-status" class="empty">Loading…</div>
+        <div id="fbusers-list" class="grid" hidden></div>
+      </div>
+      <div class="logs-section">
         <h2>Sentry Logs</h2>
         <div id="sentry-status" class="empty">Loading…</div>
         <div id="sentry-list" class="grid" hidden></div>
       </div>
     </div>
-    <div class="footer">Showing latest results from <code>/logs</code> and <code>/sentry-logs</code></div>
+    <div class="footer">Showing latest results from <code>/logs</code>, <code>/sentry-logs</code> and users from <code>/firebase-users</code></div>
   </main>
 
   <script>
@@ -184,6 +193,8 @@
     const statusEl = document.getElementById('status');
     const sentryListEl = document.getElementById('sentry-list');
     const sentryStatusEl = document.getElementById('sentry-status');
+    const fbUsersListEl = document.getElementById('fbusers-list');
+    const fbUsersStatusEl = document.getElementById('fbusers-status');
     const qEl = document.getElementById('q');
     const sevEl = document.getElementById('sev');
     const refreshBtn = document.getElementById('refresh');
@@ -327,6 +338,45 @@
           window.open('https://console.cloud.google.com/logs/query', '_blank');
         }
       });
+    }
+
+    function renderFirebaseUsers(items) {
+      const q = qEl.value.trim().toLowerCase();
+
+      const filtered = !q ? items : items.filter(u => {
+        const hay = `${u.displayName || ''} ${u.email || ''}`.toLowerCase();
+        return hay.includes(q);
+      });
+
+      fbUsersListEl.innerHTML = '';
+      if (!filtered.length) {
+        fbUsersStatusEl.textContent = 'No users';
+        fbUsersStatusEl.className = 'empty';
+        fbUsersListEl.hidden = true;
+        return;
+      }
+      fbUsersStatusEl.textContent = '';
+      fbUsersListEl.hidden = false;
+
+      for (const u of filtered) {
+        const name = u.displayName || u.email || u.uid || 'User';
+        const last = u.lastSignInTime ? fmtTs(u.lastSignInTime) : '—';
+        const card = document.createElement('article');
+        card.className = 'card';
+        card.innerHTML = `
+          <div class="card-h">
+            <div class="meta">
+              <span class="name">${escapeHTML(name)}</span>
+              <span class="ts">${escapeHTML(last)}</span>
+            </div>
+            <div class="badges">
+              ${u.email ? `<span class="badge" title="Email">${escapeHTML(u.email)}</span>` : ''}
+              ${u.uid ? `<span class="badge" title="UID">${escapeHTML(u.uid)}</span>` : ''}
+            </div>
+          </div>
+        `;
+        fbUsersListEl.appendChild(card);
+      }
     }
 
     function renderSentry(items) {
@@ -552,6 +602,27 @@
       }
     }
 
+    async function loadFirebaseUsers() {
+      fbUsersStatusEl.textContent = 'Loading…';
+      fbUsersStatusEl.className = 'empty';
+      try {
+        const q = encodeURIComponent(qEl.value.trim());
+        const res = await fetch(`/firebase-users?q=${q}`);
+        if (!res.ok) {
+          let details = '';
+          try { const j = await res.json(); details = j && j.error ? ` — ${j.error}` : ''; } catch {}
+          throw new Error(`${res.status} ${res.statusText}${details}`);
+        }
+        const data = await res.json();
+        const users = Array.isArray(data) ? data : (data.users || []);
+        renderFirebaseUsers(users);
+      } catch (err) {
+        fbUsersStatusEl.textContent = `Failed to load Firebase users: ${err.message}`;
+        fbUsersStatusEl.className = 'error';
+        fbUsersListEl.hidden = true;
+      }
+    }
+
     async function load() {
       // Load configuration first
       await loadConfig();
@@ -570,14 +641,17 @@
         listEl.hidden = true;
       }
       
-      // Load Sentry logs in parallel
+      // Load Sentry logs and Firebase users in parallel
       loadSentry();
+      loadFirebaseUsers();
     }
 
     refreshBtn.onclick = load;
     qEl.oninput = () => {
       renderGCP(cache);
       renderSentry(sentryCache);
+      // Refresh users on query change for server-side filtering
+      loadFirebaseUsers();
     };
     sevEl.onchange = () => {
       renderGCP(cache);
